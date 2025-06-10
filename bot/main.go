@@ -12,9 +12,40 @@ import (
 	"time"
 )
 
+// Example message received from signal-cli
+// {
+//   "envelope": {
+//     "source": "+12025550123",
+//     "sourceNumber": "+12025550123",
+//     "sourceUuid": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+//     "sourceName": "Alex",
+//     "sourceDevice": 1,
+//     "timestamp": 1749577203637,
+//     "serverReceivedTimestamp": 1749577201848,
+//     "serverDeliveredTimestamp": 1749577201850,
+//     "syncMessage": {
+//       "sentMessage": {
+//         "destination": "+12025550123",
+//         "destinationNumber": "+12025550123",
+//         "destinationUuid": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+//         "timestamp": 1749577203637,
+//         "message": "Hello there",
+//         "expiresInSeconds": 0,
+//         "viewOnce": false
+//       }
+//     }
+//   },
+//   "account": "+12025550123"
+// }
+
 type Message struct {
 	Envelope struct {
 		Source      string `json:"source"`
+		SyncMessage struct {
+			SentMessage struct {
+				Message string `json:"message"`
+			} `json:"sentMessage"`
+		} `json:"syncMessage"`
 		DataMessage struct {
 			Message string `json:"message"`
 		} `json:"dataMessage"`
@@ -28,8 +59,8 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-func receiveMessages(signalNumber string) ([]Message, error) {
-	cmd := exec.Command("signal-cli", "-u", signalNumber, "receive", "-t", "json")
+func receiveMessages() ([]Message, error) {
+	cmd := exec.Command("signal-cli", "--output=json", "receive")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
@@ -47,15 +78,27 @@ func receiveMessages(signalNumber string) ([]Message, error) {
 	return messages, nil
 }
 
-func sendReply(signalNumber, recipient, text string) {
-	exec.Command("signal-cli", "-u", signalNumber, "send", "-m", text, recipient).Run()
+func sendReply(recipient, text string) {
+	exec.Command("signal-cli", "send", "-m", text, recipient).Run()
 }
 
 func callAgent(agentURL, prompt string) (string, error) {
 	payload := map[string]string{"prompt": prompt}
 	body, _ := json.Marshal(payload)
-	resp, err := http.Post(agentURL, "application/json", bytes.NewBuffer(body))
+
+	if agentURL == "" {
+		return "", fmt.Errorf("agent URL is not set")
+	}
+	if !strings.HasPrefix(agentURL, "http://") && !strings.HasPrefix(agentURL, "https://") {
+		return "", fmt.Errorf("invalid agent URL: %s", agentURL)
+	}
+	if !strings.HasSuffix(agentURL, "/") {
+		agentURL += "/"
+	}
+
+	resp, err := http.Post(agentURL+"signal-bot", "application/json", bytes.NewBuffer(body))
 	if err != nil {
+		fmt.Printf("Error calling agent: %s\n", err)
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -66,12 +109,11 @@ func callAgent(agentURL, prompt string) (string, error) {
 }
 
 func main() {
-	signalNumber := getEnv("SIGNAL_NUMBER", "")
 	aiPrefix := getEnv("AI_PREFIX", "!ai")
 	agentURL := getEnv("AGENT_URL", "")
 
 	for {
-		msgs, err := receiveMessages(signalNumber)
+		msgs, err := receiveMessages()
 		if err != nil {
 			fmt.Println("Error receiving messages:", err)
 			time.Sleep(10 * time.Second)
@@ -79,32 +121,35 @@ func main() {
 		}
 
 		for _, msg := range msgs {
-			content := msg.Envelope.DataMessage.Message
+			content := msg.Envelope.SyncMessage.SentMessage.Message
+			if content == "" {
+				content = msg.Envelope.DataMessage.Message
+			}
 			if strings.HasPrefix(content, "!ai ") {
 				prompt := strings.TrimPrefix(content, "!ai ")
 				reply, err := callAgent(agentURL, prompt)
 				if err != nil {
 					reply = "Error: " + err.Error()
 				}
-				sendReply(signalNumber, msg.Envelope.Source, reply)
+				sendReply(msg.Envelope.Source, reply)
 			} else if strings.HasPrefix(content, "!code ") {
 				prompt := "Respond with only code. " + strings.TrimPrefix(content, "!code ")
 				reply, err := callAgent(agentURL, prompt)
 				if err != nil {
 					reply = "Error: " + err.Error()
 				}
-				sendReply(signalNumber, msg.Envelope.Source, reply)
+				sendReply(msg.Envelope.Source, reply)
 			} else if strings.HasPrefix(content, "!img ") {
-				sendReply(signalNumber, msg.Envelope.Source, "Image generation is not yet supported.")
+				sendReply(msg.Envelope.Source, "Image generation is not yet supported.")
 			} else if strings.HasPrefix(content, "!weather ") {
-				sendReply(signalNumber, msg.Envelope.Source, "Weather feature coming soon.")
+				sendReply(msg.Envelope.Source, "Weather feature coming soon, maybe.")
 				prompt := strings.TrimPrefix(content, aiPrefix)
 				fmt.Printf("AI prompt from %s: %s\n", msg.Envelope.Source, prompt)
 				reply, err := callAgent(agentURL, prompt)
 				if err != nil {
 					reply = "Sorry, I had an error: " + err.Error()
 				}
-				sendReply(signalNumber, msg.Envelope.Source, reply)
+				sendReply(msg.Envelope.Source, reply)
 			}
 		}
 		time.Sleep(5 * time.Second)

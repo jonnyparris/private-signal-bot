@@ -109,6 +109,25 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
 
+    if (url.pathname === "/signal-bot") {
+      try {
+        const { prompt } = (await request.json()) as any;
+
+        const response = await env.AI.run(
+          "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+          {
+            prompt,
+          }
+        );
+
+        return new Response(JSON.stringify(response), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (error) {
+        console.error("Error in /signal-bot:", error);
+        return new Response("Internal Server Error", { status: 500 });
+      }
+    }
     if (url.pathname === "/check-open-ai-key") {
       const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
       return Response.json({

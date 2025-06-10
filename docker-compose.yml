@@ -1,27 +1,19 @@
-version: '3.8'
-
 services:
   signalbot:
-    image: golang:1.21-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SIGNAL_CLI_VERSION: ${SIGNAL_CLI_VERSION}
     working_dir: /app
     volumes:
-      - ./bot:/app
       - signal-data:/root/.local/share/signal-cli
     environment:
-      - SIGNAL_NUMBER=${SIGNAL_NUMBER}
       - AI_PREFIX=${AI_PREFIX}
       - AGENT_URL=${AGENT_URL}
-    entrypoint: |
-      sh -c "
-        apk add --no-cache openjdk17 curl unzip jq git && \
-        curl -L -o signal-cli.tar.gz https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}-Linux.tar.gz && \
-        tar -xzf signal-cli.tar.gz && \
-        mv signal-cli-${SIGNAL_CLI_VERSION} /opt/signal-cli && \
-        ln -s /opt/signal-cli/bin/signal-cli /usr/local/bin/signal-cli && \
-        go run main.go
-      "
     env_file:
       - ./bot/.env
+    command: ['/app/signalbot']
 
 volumes:
   signal-data:
