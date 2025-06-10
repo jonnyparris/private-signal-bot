@@ -77,4 +77,4 @@ npx wrangler deploy
 
 ## 📜 License
 
-MIT
+GPLv3
