@@ -37,9 +37,9 @@ cp bot/.env.example bot/.env  # then fill it out
 ### 2. Link your Signal device
 
 ```bash
-docker-compose run signalbot signal-cli -u +1234567890 link -n signal-bot
+docker-compose run signalbot signal-cli link -n my-signal-bot-name
 ```
-
+This should generate a url that you need to generate a QR code for.
 Scan the QR code using your Signal app.
 
 ### 3. Start the bot
@@ -61,9 +61,9 @@ npx wrangler deploy
 - The Go bot uses `signal-cli` to receive messages.
 - Supported commands:
   - `!ai <prompt>` → LLM completion
-  - `!img <description>` → Generate image (future extension)
   - `!code <request>` → Code-oriented completion
-  - `!weather <location>` → Custom logic/API call
+  <!-- - `!img <description>` → Generate image (future extension) -->
+  <!-- - `!weather <location>` → Custom logic/API call -->
 - Replies are returned and sent via Signal.
 
 ## 💬 Example Usage
@@ -73,7 +73,7 @@ npx wrangler deploy
 | `hello` | _Ignored_ |
 | `!ai What is AI?` | LLM response |
 | `!code Write a Go function` | Code block |
-| `!weather London` | Weather data |
+<!-- | `!weather London` | Weather data | -->
 
 ## 📜 License
 
