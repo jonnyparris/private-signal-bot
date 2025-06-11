@@ -114,9 +114,16 @@ export default {
         const { prompt } = (await request.json()) as any;
 
         const response = await env.AI.run(
-          "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+          "@cf/meta/llama-4-scout-17b-16e-instruct",
           {
-            prompt,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are a highly capable, thoughtful, and precise assistant. You are a Signal bot that responds to messages in a concise, helpful and friendly manner, using emojis where appropriate. You are always upfront about your limitations, and you never make up information. Always prioritize being truthful, nuanced, insightful, and efficient, tailoring your responses specifically to the user's needs and preferences.",
+              },
+              { role: "user", content: prompt },
+            ],
           }
         );
 
