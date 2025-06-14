@@ -3,55 +3,84 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
-// Example message received from signal-cli
-// {
-//   "envelope": {
-//     "source": "+12025550123",
-//     "sourceNumber": "+12025550123",
-//     "sourceUuid": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
-//     "sourceName": "Alex",
-//     "sourceDevice": 1,
-//     "timestamp": 1749577203637,
-//     "serverReceivedTimestamp": 1749577201848,
-//     "serverDeliveredTimestamp": 1749577201850,
-//     "syncMessage": {
-//       "sentMessage": {
-//         "destination": "+12025550123",
-//         "destinationNumber": "+12025550123",
-//         "destinationUuid": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
-//         "timestamp": 1749577203637,
-//         "message": "Hello there",
-//         "expiresInSeconds": 0,
-//         "viewOnce": false
-//       }
-//     }
-//   },
-//   "account": "+12025550123"
-// }
+// Config holds the bot configuration
+type Config struct {
+	AIPrefix string
+	AgentURL string
+}
 
+// Message represents a Signal message structure
 type Message struct {
 	Envelope struct {
 		Source      string `json:"source"`
+		Timestamp   int64  `json:"timestamp"`
 		SyncMessage struct {
 			SentMessage struct {
-				Message string `json:"message"`
+				Message   string `json:"message"`
+				GroupInfo struct {
+					GroupId   string `json:"groupId"`
+					GroupName string `json:"groupName"`
+				} `json:"groupInfo"`
 			} `json:"sentMessage"`
 		} `json:"syncMessage"`
 		DataMessage struct {
-			Message string `json:"message"`
+			Message   string `json:"message"`
+			GroupInfo struct {
+				GroupId   string `json:"groupId"`
+				GroupName string `json:"groupName"`
+			} `json:"groupInfo"`
 		} `json:"dataMessage"`
 	} `json:"envelope"`
 }
 
+// AgentRequest represents the request payload to the agent
+type AgentRequest struct {
+	Prompt string `json:"prompt"`
+}
+
+// AgentResponse represents the response from the agent
+type AgentResponse struct {
+	Response string `json:"response"`
+}
+
+// SignalBot handles Signal message processing
+type SignalBot struct {
+	config   Config
+	logger   *log.Logger
+	triggers []string
+}
+
+// NewSignalBot creates a new SignalBot instance
+func NewSignalBot() *SignalBot {
+	config := Config{
+		AIPrefix: getEnv("AI_PREFIX", "!ai"),
+		AgentURL: getEnv("AGENT_URL", ""),
+	}
+
+	logger := log.New(os.Stdout, "[SignalBot] ", log.LstdFlags)
+
+	return &SignalBot{
+		config:   config,
+		logger:   logger,
+		triggers: []string{"🤖 ", "qq ", config.AIPrefix + " "},
+	}
+}
+
+// getEnv returns environment variable value or fallback
 func getEnv(key, fallback string) string {
 	if val, exists := os.LookupEnv(key); exists {
 		return val
@@ -59,99 +88,273 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-func receiveMessages() ([]Message, error) {
-	cmd := exec.Command("signal-cli", "--output=json", "receive")
+// validateConfig checks if the bot configuration is valid
+func (bot *SignalBot) validateConfig() error {
+	if bot.config.AgentURL == "" {
+		return fmt.Errorf("AGENT_URL environment variable is required")
+	}
+
+	if !strings.HasPrefix(bot.config.AgentURL, "http://") &&
+		!strings.HasPrefix(bot.config.AgentURL, "https://") {
+		return fmt.Errorf("invalid agent URL: %s (must start with http:// or https://)", bot.config.AgentURL)
+	}
+
+	return nil
+}
+
+// receiveMessages fetches messages from signal-cli
+func (bot *SignalBot) receiveMessages() ([]Message, error) {
+	cmd := exec.Command("signal-cli", "--output=json", "receive", "--ignore-attachments", "--ignore-stories")
 	var out bytes.Buffer
 	cmd.Stdout = &out
+
 	if err := cmd.Run(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to execute signal-cli: %w", err)
 	}
 
 	var messages []Message
 	scanner := bufio.NewScanner(&out)
+
 	for scanner.Scan() {
 		var msg Message
-		if err := json.Unmarshal(scanner.Bytes(), &msg); err == nil {
-			messages = append(messages, msg)
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			bot.logger.Printf("Error unmarshaling JSON: %v", err)
+			continue
 		}
+		messages = append(messages, msg)
 	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading signal-cli output: %w", err)
+	}
+
 	return messages, nil
 }
 
-func sendReply(recipient, text string) {
-	exec.Command("signal-cli", "send", "-m", text, recipient).Run()
+// sendReply sends a reply message via signal-cli with italic formatting
+func (bot *SignalBot) sendReply(recipient, text string, quoteMsgId int64, quoteAuthor string) error {
+	// Format response in italics using Signal's markdown syntax
+	formattedText := fmt.Sprintf("_%s_", text)
+
+	var args []string
+
+	// Handle group vs individual messages differently
+	if strings.HasPrefix(recipient, "-g ") {
+		// Group message: extract group ID and use proper syntax
+		groupId := strings.TrimPrefix(recipient, "-g ")
+		args = []string{"send", "-g", groupId, "-m", formattedText}
+
+		// Always add quote parameters
+		if quoteMsgId > 0 && quoteAuthor != "" {
+			args = append(args, "--quote-timestamp", strconv.FormatInt(quoteMsgId, 10))
+			args = append(args, "--quote-author", quoteAuthor)
+		}
+	} else {
+		// Individual message
+		args = []string{"send", "-m", formattedText, recipient}
+
+		// Always add quote parameters
+		if quoteMsgId > 0 && quoteAuthor != "" {
+			args = append(args, "--quote-timestamp", strconv.FormatInt(quoteMsgId, 10))
+			args = append(args, "--quote-author", quoteAuthor)
+		}
+	}
+
+	// bot.logger.Printf("Executing: signal-cli %s", strings.Join(args, " "))
+
+	cmd := exec.Command("signal-cli", args...)
+
+	// Capture both stdout and stderr for better debugging
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		bot.logger.Printf("Command failed - stdout: %s, stderr: %s", stdout.String(), stderr.String())
+		return fmt.Errorf("failed to send reply to %s: %w (stderr: %s)", recipient, err, stderr.String())
+	}
+
+	return nil
 }
 
-func callAgent(agentURL, prompt string) (string, error) {
-	payload := map[string]string{"prompt": prompt}
-	body, _ := json.Marshal(payload)
-
-	if agentURL == "" {
-		return "", fmt.Errorf("agent URL is not set")
-	}
-	if !strings.HasPrefix(agentURL, "http://") && !strings.HasPrefix(agentURL, "https://") {
-		return "", fmt.Errorf("invalid agent URL: %s", agentURL)
-	}
-	if !strings.HasSuffix(agentURL, "/") {
-		agentURL += "/"
-	}
-
-	resp, err := http.Post(agentURL+"signal-bot", "application/json", bytes.NewBuffer(body))
+// callAgent makes a request to the AI agent
+func (bot *SignalBot) callAgent(ctx context.Context, prompt string) (string, error) {
+	request := AgentRequest{Prompt: prompt}
+	body, err := json.Marshal(request)
 	if err != nil {
-		fmt.Printf("Error calling agent: %s\n", err)
-		return "", err
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := strings.TrimSuffix(bot.config.AgentURL, "/") + "/signal-bot"
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to call agent: %w", err)
 	}
 	defer resp.Body.Close()
 
-	var response map[string]string
-	json.NewDecoder(resp.Body).Decode(&response)
-	return response["response"], nil
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("agent returned status %d", resp.StatusCode)
+	}
+
+	var response AgentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return response.Response, nil
+}
+
+// extractContent extracts message content from either sync or data message
+func (msg *Message) extractContent() string {
+	if content := msg.Envelope.SyncMessage.SentMessage.Message; content != "" {
+		return content
+	}
+	return msg.Envelope.DataMessage.Message
+}
+
+// extractGroupId extracts group ID from either sync or data message
+func (msg *Message) extractGroupId() string {
+	if groupId := msg.Envelope.SyncMessage.SentMessage.GroupInfo.GroupId; groupId != "" {
+		return groupId
+	}
+	return msg.Envelope.DataMessage.GroupInfo.GroupId
+}
+
+// getRecipient determines the recipient (individual or group)
+func (msg *Message) getRecipient() string {
+	if groupId := msg.extractGroupId(); groupId != "" {
+		return "-g " + groupId
+	}
+	return msg.Envelope.Source
+}
+
+// isTriggered checks if the message should trigger the bot
+func (bot *SignalBot) isTriggered(content string) bool {
+	for _, trigger := range bot.triggers {
+		if strings.HasPrefix(content, trigger) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractPrompt removes the trigger prefix from the message content
+func (bot *SignalBot) extractPrompt(content string) string {
+	for _, trigger := range bot.triggers {
+		if strings.HasPrefix(content, trigger) {
+			return strings.TrimSpace(strings.TrimPrefix(content, trigger))
+		}
+	}
+	return content
+}
+
+// processMessage handles a single message
+func (bot *SignalBot) processMessage(ctx context.Context, msg Message) {
+	content := msg.extractContent()
+	if content == "" {
+		return
+	}
+
+	if !bot.isTriggered(content) {
+		return
+	}
+
+	prompt := bot.extractPrompt(content)
+	if prompt == "" {
+		bot.logger.Printf("Empty prompt after removing trigger prefix")
+		return
+	}
+
+	// bot.logger.Printf("Processing message: %s", prompt)
+
+	reply, err := bot.callAgent(ctx, prompt)
+	if err != nil {
+		bot.logger.Printf("Error calling agent: %v", err)
+		reply = "Sorry, I encountered an error processing your request."
+	}
+
+	recipient := msg.getRecipient()
+	quoteAuthor := msg.Envelope.Source
+
+	if err := bot.sendReply(recipient, reply, msg.Envelope.Timestamp, quoteAuthor); err != nil {
+		bot.logger.Printf("Error sending reply: %v", err)
+	}
+	//  else {
+	// bot.logger.Printf("Sent reply to %s", recipient)
+	// }
+}
+
+// Run starts the bot's main processing loop
+func (bot *SignalBot) Run(ctx context.Context) error {
+	if err := bot.validateConfig(); err != nil {
+		return fmt.Errorf("configuration error: %w", err)
+	}
+
+	bot.logger.Printf("Starting Signal bot with triggers: %v", bot.triggers)
+	bot.logger.Printf("Agent URL: %s", bot.config.AgentURL)
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			bot.logger.Printf("Shutting down bot...")
+			return ctx.Err()
+		case <-ticker.C:
+			messages, err := bot.receiveMessages()
+			if err != nil {
+				bot.logger.Printf("Error receiving messages: %v", err)
+				continue
+			}
+
+			if len(messages) == 0 {
+				continue
+			}
+
+			bot.logger.Printf("Received %d messages", len(messages))
+
+			for _, msg := range messages {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					bot.processMessage(ctx, msg)
+				}
+			}
+
+			// Brief pause between message processing
+			time.Sleep(1 * time.Second)
+		}
+	}
 }
 
 func main() {
-	aiPrefix := getEnv("AI_PREFIX", "!ai")
-	agentURL := getEnv("AGENT_URL", "")
+	bot := NewSignalBot()
 
-	for {
-		msgs, err := receiveMessages()
-		if err != nil {
-			fmt.Println("Error receiving messages:", err)
-			time.Sleep(10 * time.Second)
-			continue
-		}
+	// Setup graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		for _, msg := range msgs {
-			content := msg.Envelope.SyncMessage.SentMessage.Message
-			if content == "" {
-				content = msg.Envelope.DataMessage.Message
-			}
-			if strings.HasPrefix(content, "!ai ") {
-				prompt := strings.TrimPrefix(content, "!ai ")
-				reply, err := callAgent(agentURL, prompt)
-				if err != nil {
-					reply = "Error: " + err.Error()
-				}
-				sendReply(msg.Envelope.Source, reply)
-			} else if strings.HasPrefix(content, "!code ") {
-				prompt := "Respond with only code. " + strings.TrimPrefix(content, "!code ")
-				reply, err := callAgent(agentURL, prompt)
-				if err != nil {
-					reply = "Error: " + err.Error()
-				}
-				sendReply(msg.Envelope.Source, reply)
-			} else if strings.HasPrefix(content, "!img ") {
-				sendReply(msg.Envelope.Source, "Image generation is not yet supported.")
-			} else if strings.HasPrefix(content, "!weather ") {
-				sendReply(msg.Envelope.Source, "Weather feature coming soon, maybe.")
-				prompt := strings.TrimPrefix(content, aiPrefix)
-				fmt.Printf("AI prompt from %s: %s\n", msg.Envelope.Source, prompt)
-				reply, err := callAgent(agentURL, prompt)
-				if err != nil {
-					reply = "Sorry, I had an error: " + err.Error()
-				}
-				sendReply(msg.Envelope.Source, reply)
-			}
-		}
-		time.Sleep(5 * time.Second)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		log.Println("Received shutdown signal")
+		cancel()
+	}()
+
+	if err := bot.Run(ctx); err != nil && err != context.Canceled {
+		log.Fatalf("Bot error: %v", err)
 	}
 }
