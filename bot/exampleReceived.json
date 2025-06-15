@@ -1,0 +1,33 @@
+{
+  "envelope": {
+    "source": "+19045627893",
+    "sourceNumber": "+19045627893",
+    "sourceUuid": "b2e8f471-9a12-4c89-af65-2d8c5e4b7f31",
+    "sourceName": "Marcus",
+    "sourceDevice": 1,
+    "timestamp": 1721845239472,
+    "serverReceivedTimestamp": 1721845239681,
+    "serverDeliveredTimestamp": 1721845239684,
+    "dataMessage": {
+      "timestamp": 1721845239472,
+      "message": "Sounds crystal clear on my end",
+      "expiresInSeconds": 0,
+      "viewOnce": false,
+      "quote": {
+        "id": 1721845198103,
+        "author": "+16174829536",
+        "authorNumber": "+16174829536",
+        "authorUuid": "3a9d7e42-f158-4b32-8e71-9c6f2a4b8d95",
+        "text": "Audio test 123",
+        "attachments": []
+      },
+      "groupInfo": {
+        "groupId": "H/MWZ1vXskmPF4Rbzh75pSlgZdZnR1wj8fVC+r5c7Tg=",
+        "groupName": "Coffee Break Crew",
+        "revision": 4,
+        "type": "DELIVER"
+      }
+    }
+  },
+  "account": "+16174829536"
+}

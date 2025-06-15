@@ -1,0 +1,30 @@
+{
+  "envelope": {
+    "source": "+447923871456",
+    "sourceNumber": "+447923871456",
+    "sourceUuid": "c7f4a9e2-8d31-4b65-9c02-7e4f1a8b3d92",
+    "sourceName": "Charlotte",
+    "sourceDevice": 1,
+    "timestamp": 1734567892841,
+    "serverReceivedTimestamp": 1734567891923,
+    "serverDeliveredTimestamp": 1734567892105,
+    "syncMessage": {
+      "sentMessage": {
+        "destination": null,
+        "destinationNumber": null,
+        "destinationUuid": null,
+        "timestamp": 1734567892841,
+        "message": "Running late, be there in 10",
+        "expiresInSeconds": 0,
+        "viewOnce": false,
+        "groupInfo": {
+          "groupId": "9mK2LpVxQa7fWB8nxEJD2+TRAxIqH9EdMCKwlpNH1wZ=",
+          "groupName": "Weekend Plans Squad",
+          "revision": 6,
+          "type": "DELIVER"
+        }
+      }
+    }
+  },
+  "account": "+447923871456"
+}
