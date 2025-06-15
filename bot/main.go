@@ -131,18 +131,15 @@ func (bot *SignalBot) receiveMessages() ([]Message, error) {
 	return messages, nil
 }
 
-// sendReply sends a reply message via signal-cli with italic formatting
+// sendReply sends a reply message via signal-cli with italic formatting using --text-style
 func (bot *SignalBot) sendReply(recipient, text string, quoteMsgId int64, quoteAuthor string) error {
-	// Format response in italics using Signal's markdown syntax
-	formattedText := fmt.Sprintf("_%s_", text)
-
 	var args []string
 
 	// Handle group vs individual messages differently
 	if strings.HasPrefix(recipient, "-g ") {
 		// Group message: extract group ID and use proper syntax
 		groupId := strings.TrimPrefix(recipient, "-g ")
-		args = []string{"send", "-g", groupId, "-m", formattedText}
+		args = []string{"send", "-g", groupId, "-m", text, "--text-style", "0:" + strconv.Itoa(len(text)) + ":ITALIC"}
 
 		// Always add quote parameters
 		if quoteMsgId > 0 && quoteAuthor != "" {
@@ -151,7 +148,7 @@ func (bot *SignalBot) sendReply(recipient, text string, quoteMsgId int64, quoteA
 		}
 	} else {
 		// Individual message
-		args = []string{"send", "-m", formattedText, recipient}
+		args = []string{"send", "-m", text, "--text-style", "0:" + strconv.Itoa(len(text)) + ":ITALIC", recipient}
 
 		// Always add quote parameters
 		if quoteMsgId > 0 && quoteAuthor != "" {
@@ -237,21 +234,37 @@ func (msg *Message) getRecipient() string {
 	return msg.Envelope.Source
 }
 
-// isTriggered checks if the message should trigger the bot
+// isTriggered checks if the message should trigger the bot (case-insensitive for "qq")
 func (bot *SignalBot) isTriggered(content string) bool {
 	for _, trigger := range bot.triggers {
-		if strings.HasPrefix(content, trigger) {
-			return true
+		if trigger == "qq " {
+			// Case-insensitive check for "qq " trigger
+			if len(content) >= 3 && strings.ToLower(content[:3]) == "qq " {
+				return true
+			}
+		} else {
+			// Case-sensitive check for other triggers
+			if strings.HasPrefix(content, trigger) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// extractPrompt removes the trigger prefix from the message content
+// extractPrompt removes the trigger prefix from the message content (case-insensitive for "qq")
 func (bot *SignalBot) extractPrompt(content string) string {
 	for _, trigger := range bot.triggers {
-		if strings.HasPrefix(content, trigger) {
-			return strings.TrimSpace(strings.TrimPrefix(content, trigger))
+		if trigger == "qq " {
+			// Case-insensitive check for "qq " trigger
+			if len(content) >= 3 && strings.ToLower(content[:3]) == "qq " {
+				return strings.TrimSpace(content[3:])
+			}
+		} else {
+			// Case-sensitive check for other triggers
+			if strings.HasPrefix(content, trigger) {
+				return strings.TrimSpace(strings.TrimPrefix(content, trigger))
+			}
 		}
 	}
 	return content
