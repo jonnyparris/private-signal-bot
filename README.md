@@ -1,6 +1,6 @@
 # 🔐 Private AI Signal Bot
 
-This project is a lightweight, Dockerized AI chatbot that listens to your personal Signal messages via a prefix (`!ai`, `!img`, `!code`, `!weather`) and routes them to an LLM via a [Cloudflare AI Gateway Worker](https://developers.cloudflare.com/agents/).
+This project is a lightweight, Dockerized AI chatbot that listens to your personal Signal messages via a prefix (`!ai`, `!img`, `!code`, `!weather`) and routes them to an LLM via a [Cloudflare AI Worker](https://developers.cloudflare.com/agents/).
 
 ## 🚀 Features
 
@@ -19,7 +19,7 @@ my-ai-signal-bot/
 │   ├── go.mod
 │   └── .env
 ├── worker/
-│   └── agents sdk starter boilerplate
+│   └── Cloudflare Worker code for routing AI requests
 ├── docker-compose.yml
 └── README.md
 ```
@@ -39,13 +39,13 @@ cp bot/.env.example bot/.env  # then fill it out
 ```bash
 docker-compose run signalbot signal-cli link -n my-signal-bot-name
 ```
-This should generate a url that you need to generate a QR code for.
+This should generate a url that you need to [generate a QR code](https://www.qr-code-generator.com/) for.
 Scan the QR code using your Signal app.
 
 ### 3. Start the bot
 
 ```bash
-docker-compose up
+docker-compose up -d
 ```
 
 ### 4. Deploy the Cloudflare Worker
@@ -61,7 +61,9 @@ npx wrangler deploy
 - The Go bot uses `signal-cli` to receive messages.
 - Supported commands:
   - `!ai <prompt>` → LLM completion
-  - `!code <request>` → Code-oriented completion
+  - `qq <prompt>` → LLM completion
+  - `🤖 <prompt>` → LLM completion
+  <!-- - `!code <request>` → Code-oriented completion -->
   <!-- - `!img <description>` → Generate image (future extension) -->
   <!-- - `!weather <location>` → Custom logic/API call -->
 - Replies are returned and sent via Signal.
@@ -72,7 +74,7 @@ npx wrangler deploy
 |--------|--------------|
 | `hello` | _Ignored_ |
 | `!ai What is AI?` | LLM response |
-| `!code Write a Go function` | Code block |
+<!-- | `!code Write a Go function` | Code block | -->
 <!-- | `!weather London` | Weather data | -->
 
 ## 📜 License
