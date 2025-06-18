@@ -10,15 +10,15 @@
 	"compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
 	"migrations": [
 		{
-			"new_sqlite_classes": ["ZiggyDO"],
+			"new_sqlite_classes": ["Ziggy"],
 			"tag": "v1"
 		}
 	],
 	"durable_objects": {
 		"bindings": [
 			{
-				"class_name": "ZiggyDO",
-				"name": "ZIGGY_DO"
+				"class_name": "Ziggy",
+				"name": "Ziggy"
 			}
 		]
 	},

@@ -9,13 +9,12 @@
 		"cf-typegen": "wrangler types"
 	},
 	"devDependencies": {
+		"@types/node": "^24.0.3",
 		"typescript": "^5.5.2",
 		"wrangler": "^4.20.0"
 	},
 	"dependencies": {
 		"@cloudflare/ai-utils": "^1.0.1",
-		"agents": "^0.0.95",
-		"ai": "^4.3.16",
-		"zod": "^3.25.64"
+		"agents": "^0.0.95"
 	}
 }
