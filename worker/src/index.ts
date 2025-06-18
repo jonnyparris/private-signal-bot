@@ -2,14 +2,20 @@ import { Agent, getAgentByName, routeAgentRequest, type AgentNamespace } from 'a
 import { runWithTools } from '@cloudflare/ai-utils';
 import { tools } from './tools';
 import { env } from 'cloudflare:workers';
+import { createAiGateway } from 'ai-gateway-provider';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { generateText } from 'ai';
 
 type Env = {
+	GW_TOKEN: string;
 	AI: Ai;
 	Ziggy: AgentNamespace<Ziggy>;
 };
 interface MyState {
 	// Define any state properties you need for your Agent
 }
+
 export class Ziggy extends Agent<Env, MyState> {
 	async onRequest(request: Request): Promise<Response> {
 		if (request.method === 'POST') {
@@ -32,8 +38,26 @@ export class Ziggy extends Agent<Env, MyState> {
 			// const mcpConnection = await this.mcp.connect(
 			//   "https://path-to-mcp-server/sse"
 			// );
+			const aigateway = createAiGateway({
+				// binding: env.AI.gateway('cheese'),
+				accountId: '4b430e167a301330d13a9bb42f3986a2',
+				apiKey: env.GW_TOKEN,
+				gateway: 'cheese',
+				options: {
+					// Optional per-request override
+					skipCache: true,
+				},
+			});
+			const openai = createOpenAI({ apiKey: '' });
+			const gemini = createGoogleGenerativeAI({ apiKey: '' });
 
-			const response = await runWithTools(env.AI as any, '@cf/meta/llama-4-scout-17b-16e-instruct', {
+			const model = aigateway([
+				gemini('gemini-2.5-pro-preview-03-25'), // Primary choice
+				openai('gpt-4o-mini'), // Fallback if first fails
+			]);
+
+			const { text } = await generateText({
+				model,
 				messages: [
 					{
 						role: 'system',
@@ -43,9 +67,10 @@ export class Ziggy extends Agent<Env, MyState> {
 					{ role: 'user', content: prompt },
 				],
 				tools,
+				maxSteps: 10,
 			});
-			console.log('AI response received:', JSON.stringify(response, null, 2));
-			return response;
+			// console.log('AI response received:', text);
+			return { response: text };
 		} catch (error: any) {
 			console.error('Error processing ai response:', error);
 			throw new Error('Failed to process response');
