@@ -33,7 +33,7 @@ export class Ziggy extends Agent<Env, MyState> {
 			//   "https://path-to-mcp-server/sse"
 			// );
 
-			const response = await runWithTools(env.AI as any, '@cf/mistralai/mistral-small-3.1-24b-instruct', {
+			const response = await runWithTools(env.AI as any, '@cf/meta/llama-4-scout-17b-16e-instruct', {
 				messages: [
 					{
 						role: 'system',
