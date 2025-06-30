@@ -26,12 +26,16 @@ type Config struct {
 // Message represents a Signal message structure
 type Message struct {
 	Envelope struct {
-		Source      string `json:"source"`
-		Timestamp   int64  `json:"timestamp"`
-		SyncMessage struct {
+		Source         string `json:"source"`
+		Timestamp      int64  `json:"timestamp"`
+		IsReceipt      bool   `json:"isReceipt"`
+		SyncMessage    struct {
 			SentMessage struct {
-				Message   string `json:"message"`
-				GroupInfo struct {
+				Destination     string `json:"destination"`
+				DestinationUuid string `json:"destinationUuid"`
+				Message         string `json:"message"`
+				Timestamp       int64  `json:"timestamp"`
+				GroupInfo       struct {
 					GroupId   string `json:"groupId"`
 					GroupName string `json:"groupName"`
 				} `json:"groupInfo"`
@@ -39,12 +43,27 @@ type Message struct {
 		} `json:"syncMessage"`
 		DataMessage struct {
 			Message   string `json:"message"`
+			Timestamp int64  `json:"timestamp"`
 			GroupInfo struct {
 				GroupId   string `json:"groupId"`
 				GroupName string `json:"groupName"`
 			} `json:"groupInfo"`
 		} `json:"dataMessage"`
+		ReceiptMessage struct {
+			When        int64   `json:"when"`
+			IsDelivery  bool    `json:"isDelivery"`
+			IsRead      bool    `json:"isRead"`
+			Timestamps  []int64 `json:"timestamps"`
+		} `json:"receiptMessage"`
 	} `json:"envelope"`
+}
+
+// PendingMessage stores a sent AI message waiting for delivery confirmation
+type PendingMessage struct {
+	Timestamp int64
+	Content   string
+	Prompt    string
+	SentTime  time.Time
 }
 
 // AgentRequest represents the request payload to the agent
@@ -59,9 +78,10 @@ type AgentResponse struct {
 
 // SignalBot handles Signal message processing
 type SignalBot struct {
-	config   Config
-	logger   *log.Logger
-	triggers []string
+	config          Config
+	logger          *log.Logger
+	triggers        []string
+	pendingMessages map[int64]*PendingMessage // timestamp -> pending message
 }
 
 // NewSignalBot creates a new SignalBot instance
@@ -74,9 +94,10 @@ func NewSignalBot() *SignalBot {
 	logger := log.New(os.Stdout, "[SignalBot] ", log.LstdFlags)
 
 	return &SignalBot{
-		config:   config,
-		logger:   logger,
-		triggers: []string{"🤖 ", "qq ", config.AIPrefix + " "},
+		config:          config,
+		logger:          logger,
+		triggers:        []string{"🤖 ", "qq ", config.AIPrefix + " "},
+		pendingMessages: make(map[int64]*PendingMessage),
 	}
 }
 
@@ -141,23 +162,26 @@ func (bot *SignalBot) sendReply(recipient, text string, quoteMsgId int64, quoteA
 		groupId := strings.TrimPrefix(recipient, "-g ")
 		args = []string{"send", "-g", groupId, "-m", text, "--text-style", "0:" + strconv.Itoa(len(text)) + ":ITALIC"}
 
-		// Always add quote parameters
+		// Add quote parameters for groups
 		if quoteMsgId > 0 && quoteAuthor != "" {
 			args = append(args, "--quote-timestamp", strconv.FormatInt(quoteMsgId, 10))
 			args = append(args, "--quote-author", quoteAuthor)
 		}
 	} else {
-		// Individual message
-		args = []string{"send", "-m", text, "--text-style", "0:" + strconv.Itoa(len(text)) + ":ITALIC", recipient}
+		// Individual message: recipient MUST be the last argument
+		args = []string{"send", "-m", text, "--text-style", "0:" + strconv.Itoa(len(text)) + ":ITALIC"}
 
-		// Always add quote parameters
+		// Add quote parameters BEFORE the recipient
 		if quoteMsgId > 0 && quoteAuthor != "" {
 			args = append(args, "--quote-timestamp", strconv.FormatInt(quoteMsgId, 10))
 			args = append(args, "--quote-author", quoteAuthor)
 		}
+
+		// Recipient must be the final argument for individual messages
+		args = append(args, recipient)
 	}
 
-	// bot.logger.Printf("Executing: signal-cli %s", strings.Join(args, " "))
+	bot.logger.Printf("Executing: signal-cli %s", strings.Join(args, " "))
 
 	cmd := exec.Command("signal-cli", args...)
 
@@ -218,6 +242,17 @@ func (msg *Message) extractContent() string {
 	return msg.Envelope.DataMessage.Message
 }
 
+// extractTimestamp extracts message timestamp from either sync or data message
+func (msg *Message) extractTimestamp() int64 {
+	if timestamp := msg.Envelope.SyncMessage.SentMessage.Timestamp; timestamp != 0 {
+		return timestamp
+	}
+	if timestamp := msg.Envelope.DataMessage.Timestamp; timestamp != 0 {
+		return timestamp
+	}
+	return msg.Envelope.Timestamp
+}
+
 // extractGroupId extracts group ID from either sync or data message
 func (msg *Message) extractGroupId() string {
 	if groupId := msg.Envelope.SyncMessage.SentMessage.GroupInfo.GroupId; groupId != "" {
@@ -226,12 +261,20 @@ func (msg *Message) extractGroupId() string {
 	return msg.Envelope.DataMessage.GroupInfo.GroupId
 }
 
-// getRecipient determines the recipient (individual or group)
+// getRecipient determines the recipient for data messages (messages you received)
 func (msg *Message) getRecipient() string {
-	if groupId := msg.extractGroupId(); groupId != "" {
-		return "-g " + groupId
+	// For data messages (messages you RECEIVED), reply in the same context
+	if msg.Envelope.DataMessage.Message != "" {
+		// Check if it was a group message
+		if groupId := msg.Envelope.DataMessage.GroupInfo.GroupId; groupId != "" {
+			return "-g " + groupId
+		}
+		// For individual messages you received, reply to the sender
+		if msg.Envelope.Source != "" {
+			return msg.Envelope.Source
+		}
 	}
-	return msg.Envelope.Source
+	return ""
 }
 
 // isTriggered checks if the message should trigger the bot (case-insensitive for "qq")
@@ -270,8 +313,53 @@ func (bot *SignalBot) extractPrompt(content string) string {
 	return content
 }
 
+// cleanupOldPendingMessages removes pending messages older than 5 minutes
+func (bot *SignalBot) cleanupOldPendingMessages() {
+	cutoff := time.Now().Add(-5 * time.Minute)
+	for timestamp, pending := range bot.pendingMessages {
+		if pending.SentTime.Before(cutoff) {
+			delete(bot.pendingMessages, timestamp)
+		}
+	}
+}
+
 // processMessage handles a single message
 func (bot *SignalBot) processMessage(ctx context.Context, msg Message) {
+	// Handle delivery receipts first - these tell us where a sent message was delivered
+	if msg.Envelope.ReceiptMessage.IsDelivery && len(msg.Envelope.ReceiptMessage.Timestamps) > 0 {
+		bot.logger.Printf("Received delivery receipt from %s", msg.Envelope.Source)
+
+		// Check if any of the timestamps match our pending AI-triggered messages
+		for _, timestamp := range msg.Envelope.ReceiptMessage.Timestamps {
+			if pending, exists := bot.pendingMessages[timestamp]; exists {
+				bot.logger.Printf("Found pending AI message for timestamp %d, processing...", timestamp)
+
+				// Now we know where to send the reply - to the person who confirmed delivery
+				recipient := msg.Envelope.Source
+
+				// Call the AI agent with the original prompt
+				reply, err := bot.callAgent(ctx, pending.Prompt)
+				if err != nil {
+					bot.logger.Printf("Error calling agent for pending message: %v", err)
+					reply = "Sorry, I encountered an error processing your request."
+				}
+
+				// Send the reply to the person who received the original message
+				if err := bot.sendReply(recipient, reply, timestamp, msg.Envelope.Source); err != nil {
+					bot.logger.Printf("Error sending reply for pending message: %v", err)
+				} else {
+					bot.logger.Printf("Successfully sent AI reply to %s for pending message", recipient)
+				}
+
+				// Remove from pending messages
+				delete(bot.pendingMessages, timestamp)
+				return
+			}
+		}
+		return
+	}
+
+	// Handle regular messages
 	content := msg.extractContent()
 	if content == "" {
 		return
@@ -287,23 +375,67 @@ func (bot *SignalBot) processMessage(ctx context.Context, msg Message) {
 		return
 	}
 
-	// bot.logger.Printf("Processing message: %s", prompt)
+	// Handle sync messages (your own sent messages with AI triggers)
+	if msg.Envelope.SyncMessage.SentMessage.Message != "" {
+		timestamp := msg.extractTimestamp()
 
-	reply, err := bot.callAgent(ctx, prompt)
-	if err != nil {
-		bot.logger.Printf("Error calling agent: %v", err)
-		reply = "Sorry, I encountered an error processing your request."
+		// Check if this was sent to a group (we can reply immediately)
+		if groupId := msg.extractGroupId(); groupId != "" {
+			bot.logger.Printf("Processing AI-triggered group message")
+
+			reply, err := bot.callAgent(ctx, prompt)
+			if err != nil {
+				bot.logger.Printf("Error calling agent: %v", err)
+				reply = "Sorry, I encountered an error processing your request."
+			}
+
+			recipient := "-g " + groupId
+			quoteAuthor := msg.Envelope.Source
+
+			if err := bot.sendReply(recipient, reply, timestamp, quoteAuthor); err != nil {
+				bot.logger.Printf("Error sending reply: %v", err)
+			} else {
+				bot.logger.Printf("Successfully sent AI reply to group")
+			}
+			return
+		}
+
+		// For individual DMs, store as pending and wait for delivery receipt
+		bot.logger.Printf("Storing AI-triggered DM message as pending (timestamp: %d)", timestamp)
+		bot.pendingMessages[timestamp] = &PendingMessage{
+			Timestamp: timestamp,
+			Content:   content,
+			Prompt:    prompt,
+			SentTime:  time.Now(),
+		}
+		return
 	}
 
-	recipient := msg.getRecipient()
-	quoteAuthor := msg.Envelope.Source
+	// Handle data messages (messages you received)
+	if msg.Envelope.DataMessage.Message != "" {
+		recipient := msg.getRecipient()
+		if recipient == "" {
+			bot.logger.Printf("No recipient found for received message")
+			return
+		}
 
-	if err := bot.sendReply(recipient, reply, msg.Envelope.Timestamp, quoteAuthor); err != nil {
-		bot.logger.Printf("Error sending reply: %v", err)
+		bot.logger.Printf("Processing AI-triggered received message from %s", msg.Envelope.Source)
+
+		reply, err := bot.callAgent(ctx, prompt)
+		if err != nil {
+			bot.logger.Printf("Error calling agent: %v", err)
+			reply = "Sorry, I encountered an error processing your request."
+		}
+
+		timestamp := msg.extractTimestamp()
+		quoteAuthor := msg.Envelope.Source
+
+		if err := bot.sendReply(recipient, reply, timestamp, quoteAuthor); err != nil {
+			bot.logger.Printf("Error sending reply: %v", err)
+		} else {
+			bot.logger.Printf("Successfully sent AI reply to %s", recipient)
+		}
 	}
-	//  else {
-	// bot.logger.Printf("Sent reply to %s", recipient)
-	// }
 }
 
 // Run starts the bot's main processing loop
@@ -318,11 +450,17 @@ func (bot *SignalBot) Run(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	// Cleanup ticker for old pending messages
+	cleanupTicker := time.NewTicker(1 * time.Minute)
+	defer cleanupTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			bot.logger.Printf("Shutting down bot...")
 			return ctx.Err()
+		case <-cleanupTicker.C:
+			bot.cleanupOldPendingMessages()
 		case <-ticker.C:
 			messages, err := bot.receiveMessages()
 			if err != nil {
