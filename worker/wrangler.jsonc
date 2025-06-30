@@ -39,13 +39,17 @@
 	 */
 	"ai": {
 		"binding": "AI"
-	}
+	},
 
 	/**
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
 	 */
-	// "vars": { "MY_VARIABLE": "production_value" },
+	"vars": {
+		"DOCS_VECTORIZE_MCP_URL": "https://docs.mcp.cloudflare.com/mcp",
+		"BROWSER_RENDERING_MCP_URL": "https://browser.mcp.cloudflare.com/mcp",
+		"CLOUDFLARE_ACCOUNT_ID": "4b430e167a301330d13a9bb42f3986a2"
+	}
 	/**
 	 * Note: Use secrets to store sensitive data.
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
